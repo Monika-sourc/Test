@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<!-- Playables SDK -->
+<script>// Playables SDK v1.0.0
+// Game lifecycle bridge: rAF-based game-ready detection + event communication
+(function() {
+  'use strict';
+
+  // Idempotency: skip if already initialized (e.g., server-side injection
+  // followed by client-side inject-javascript via the Bloks webview component).
+  if (window.playablesSDK) return;
+
+  var HANDLER_NAME = 'playablesGameEventHandler';
+  var ANDROID_BRIDGE_NAME = '_MetaPlayablesBridge';
+  var RAF_FRAME_THRESHOLD = 3;
+
+  var gameReadySent = false;
+  var firstInteractionSent = false;
+  var errorSent = false;
+  var frameCount = 0;
+  var originalRAF = window.requestAnimationFrame;
+
+  // --- Transport Layer ---
+
+  function hasIOSBridge() {
+    return !!(window.webkit &&
+              window.webkit.messageHandlers &&
+              window.webkit.messageHandlers[HANDLER_NAME]);
+  }
+
+  function hasAndroidBridge() {
+    return !!(window[ANDROID_BRIDGE_NAME] &&
+              typeof window[ANDROID_BRIDGE_NAME].postEvent === 'function');
+  }
+
+  function isInIframe() {
+    return !!(window.parent && window.parent !== window);
+  }
+
+  function sendEvent(eventName, payload) {
+    var message = {
+      type: eventName,
+      payload: payload || {},
+      timestamp: Date.now()
+    };
+
+    if (hasIOSBridge()) {
+      try {
+        window.webkit.messageHandlers[HANDLER_NAME].postMessage(message);
+      } catch (e) { /* ignore */ }
+      return;
+    }
+
+    if (hasAndroidBridge()) {
+    try {
+      var p = payload || {};
+      p.__secureToken = window.__fbAndroidBridgeAuthToken || '';
+      p.timestamp = message.timestamp;
+      window[ANDROID_BRIDGE_NAME].postEvent(
+        eventName,
+        JSON.stringify(p)
+      );
+    } catch (e) { /* ignore */ }
+    return;
+  }
+
+    if (isInIframe()) {
+      try {
+        window.parent.postMessage(message, '*');
+      } catch (e) { /* ignore */ }
+      return;
+    }
+  }
+
+  // --- rAF Game-Ready Detection ---
+
+  function onFrame() {
+    if (gameReadySent) return;
+
+    frameCount++;
+    if (frameCount >= RAF_FRAME_THRESHOLD) {
+      gameReadySent = true;
+      sendEvent('game_ready', {
+        frame_count: frameCount,
+        detected_at: Date.now()
+      });
+      return;
+    }
+
+    originalRAF.call(window, onFrame);
+  }
+
+  if (originalRAF) {
+    window.requestAnimationFrame = function(callback) {
+      if (!gameReadySent) {
+        return originalRAF.call(window, function(timestamp) {
+          frameCount++;
+          if (frameCount >= RAF_FRAME_THRESHOLD && !gameReadySent) {
+            gameReadySent = true;
+            sendEvent('game_ready', {
+              frame_count: frameCount,
+              detected_at: Date.now()
+            });
+          }
+          callback(timestamp);
+        });
+      }
+      return originalRAF.call(window, callback);
+    };
+  }
+
+  // --- First User Interaction Detection ---
+
+  function setupFirstInteractionDetection() {
+    var events = ['touchstart', 'mousedown', 'keydown'];
+
+    function onFirstInteraction() {
+      if (firstInteractionSent) return;
+      firstInteractionSent = true;
+      sendEvent('user_interaction_start', null);
+
+      for (var i = 0; i < events.length; i++) {
+        document.removeEventListener(events[i], onFirstInteraction, true);
+      }
+    }
+
+    for (var i = 0; i < events.length; i++) {
+      document.addEventListener(events[i], onFirstInteraction, true);
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupFirstInteractionDetection);
+  } else {
+    setupFirstInteractionDetection();
+  }
+
+  // --- Auto Error Capture ---
+
+  window.addEventListener('error', function(event) {
+    if (errorSent) return;
+    errorSent = true;
+    sendEvent('error', {
+      message: event.message || 'Unknown error',
+      source: event.filename || '',
+      lineno: event.lineno || 0,
+      colno: event.colno || 0,
+      auto_captured: true
+    });
+  });
+
+  window.addEventListener('unhandledrejection', function(event) {
+    if (errorSent) return;
+    errorSent = true;
+    var reason = event.reason;
+    sendEvent('error', {
+      message: (reason instanceof Error) ? reason.message : String(reason),
+      type: 'unhandled_promise_rejection',
+      auto_captured: true
+    });
+  });
+
+  // --- Public API ---
+
+  window.playablesSDK = {
+    complete: function(score) {
+      sendEvent('game_ended', {
+        score: score,
+        completed: true
+      });
+    },
+
+    error: function(message) {
+      if (errorSent) return;
+      errorSent = true;
+      sendEvent('error', {
+        message: message || 'Unknown error',
+        auto_captured: false
+      });
+    },
+
+    sendEvent: function(eventName, payload) {
+      if (!eventName || typeof eventName !== 'string') return;
+      sendEvent(eventName, payload);
+    }
+  };
+
+  // Kick off rAF detection in case no game code calls rAF immediately
+  if (originalRAF) {
+    originalRAF.call(window, onFrame);
+  }
+})();</script>
+<!-- PLAYABLE_TOUCH_PATCH_V1 --><script>
+(function() {
+  if (window.__playableTouchPatchInstalled) return;
+  window.__playableTouchPatchInstalled = true;
+  var origAdd = EventTarget.prototype.addEventListener;
+  var blockedTypes = { touchstart: 1, touchmove: 1, wheel: 1 };
+  EventTarget.prototype.addEventListener = function(type, listener, options) {
+    if (blockedTypes[type]) {
+      if (options === undefined || options === null) {
+        options = { passive: true };
+      } else if (typeof options === 'boolean') {
+        options = { capture: options, passive: true };
+      } else {
+        options = Object.assign({}, options, { passive: true });
+      }
+    }
+    return origAdd.call(this, type, listener, options);
+  };
+})();
+</script><script>window.Intl=window.Intl||{};Intl.t=function(s){return(Intl._locale&&Intl._locale[s])||s;};</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Prestige Finance – Wniosek o pożyczkę</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet">
+<style>
+:root{--navy:#0b1220;--gold:#c9a961;--line:#e5e7eb;--muted:#6b7280}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Inter,system-ui;background:#f5f6f8;color:#111}
+.layout{display:grid;grid-template-columns:1.15fr 0.85fr;min-height:100vh}
+.visual{position:relative}
+.slides{position:absolute;inset:0}
+.slide{position:absolute;inset:0;background-size:cover;background-position:center;opacity:0;transition:opacity 1.2s;animation:fade 21s infinite}
+.slide:nth-child(1){background-image:url('https://images.unsplash.com/photo-1553877522-43269d4ea984?q=80&w=1600');opacity:1}
+.slide:nth-child(2){background-image:url('https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?q=80&w=1600');animation-delay:7s}
+.slide:nth-child(3){background-image:url('https://images.unsplash.com/photo-1520607162513-77705c0f0d4a?q=80&w=1600');animation-delay:14s}
+@keyframes fade{0%,26%,100%{opacity:0}3%,23%{opacity:1}}
+.overlay{position:absolute;inset:0;background:linear-gradient(180deg,rgba(11,18,32,.5),rgba(11,18,32,.8))}
+.v-content{position:relative;z-index:2;height:100%;display:flex;flex-direction:column;justify-content:flex-end;padding:56px;color:#fff}
+.brand{font-family:Fraunces,serif;font-size:30px;color:var(--gold)}
+.tag{margin-top:10px;font-size:17px;opacity:.92;max-width:420px}
+.form-wrap{display:flex;align-items:center;justify-content:center;padding:40px;background:#fff}
+.card{width:100%;max-width:460px}
+h1{font-family:Fraunces,serif;font-size:26px;color:var(--navy);margin-bottom:6px}
+.sub{color:var(--muted);font-size:14px;margin-bottom:24px}
+label{display:block;font-size:13px;font-weight:500;margin:12px 0 6px}
+input,select,textarea{width:100%;padding:13px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:#fcfcfd}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--gold);box-shadow:0 0 0 3px rgba(201,169,97,.15);background:#fff}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+textarea{min-height:90px}
+.check{display:flex;gap:10px;align-items:flex-start;margin:16px 0;font-size:13px}
+.check input{width:18px;height:18px;accent-color:var(--gold)}
+.btn{width:100%;background:var(--navy);color:#fff;border:none;padding:14px;border-radius:10px;font-weight:600;cursor:pointer}
+.btn:hover{background:#141f35}
+@media(max-width:900px){.layout{grid-template-columns:1fr}.visual{height:36vh}}
+</style>
+</head>
+<body>
+<div class="layout">
+  <div class="visual">
+    <div class="slides"><div class="slide"></div><div class="slide"></div><div class="slide"></div></div>
+    <div class="overlay"></div>
+    <div class="v-content">
+      <div class="brand">PRESTIGE FINANCE</div>
+      <div class="tag">Pożyczki firmowe do 50 000 PLN. Decyzja w 24h. Bez opłat wstępnych.</div>
+    </div>
+  </div>
+
+  <div class="form-wrap">
+    <div class="card">
+      <h1>Wniosek o pożyczkę</h1>
+      <p class="sub">Wypełnij – odpowiemy na Twój email.</p>
+      
+      <form action="https://api.web3forms.com/submit" method="POST">
+        <!-- CLÉ WEB3FORMS INSÉRÉE -->
+        <input type="hidden" name="access_key" value="2d59e0c8-e4f9-44d8-ab91-9c5e651c1571">
+        <input type="hidden" name="subject" value="Nowy wniosek Prestige">
+        <input type="hidden" name="from_name" value="Prestige Finance">
+        <!-- IMPORTANT pour répondre direct -->
+        <input type="hidden" name="replyto" value="email">
+
+        <div class="grid">
+          <div><label>Imię</label><input type="text" name="Imię" required></div>
+          <div><label>Nazwisko</label><input type="text" name="Nazwisko" required></div>
+        </div>
+
+        <label>Courriel client</label>
+        <input type="email" name="email" placeholder="jan@firma.pl" required>
+
+        <label>Téléphone</label>
+        <input type="tel" name="Téléphone" placeholder="+48..." required>
+
+        <div class="grid">
+          <div><label>Kwota (PLN)</label><input type="number" name="Kwota" min="1000" max="50000" required></div>
+          <div><label>Okres spłaty</label>
+            <select name="Okres spłaty" required>
+              <option>6 mois</option><option>12 mois</option><option>24 mois</option><option>36 mois</option>
+            </select>
+          </div>
+        </div>
+
+        <label>Rodzaj pożyczki</label>
+        <select name="Rodzaj pożyczki">
+          <option>Pożyczka firmowa</option><option>Gotówkowa</option><option>Hipoteczna</option>
+        </select>
+
+        <label>Cel pożyczki</label>
+        <textarea name="Cel pożyczki" placeholder="środki obrotowe, inwestycja..."></textarea>
+
+        <label class="check"><input type="checkbox" name="Zgoda RODO" value="Tak" required><span>Wyrażam zgodę na przetwarzanie danych zgodnie z RODO.</span></label>
+
+        <button class="btn" type="submit">Wyślij wniosek</button>
+      </form>
+    </div>
+  </div>
+</div>
+</body>
+</html>
